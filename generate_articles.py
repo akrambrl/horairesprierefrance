@@ -13,17 +13,24 @@ from datetime import datetime, timezone
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 CATEGORIES = [
-    ("Actualités Islam France",  "🕌", "actus"),
-    ("Actualités Islam France",  "📰", "actus"),
-    ("Histoire des Mosquées",    "🏛️", "histoire"),
-    ("Histoire des Mosquées",    "📜", "histoire"),
-    ("Conseils Pratiques",       "☪️", "conseils"),
-    ("Annonces Communautaires",  "📢", "annonces"),
+    ("Actualités Islam France",       "🕌", "actus"),
+    ("Actualités Islam France",       "📰", "actus"),
+    ("Histoire des Mosquées",         "🏛️", "histoire"),
+    ("Conseils Pratiques islamiques", "☪️", "conseils"),
+    ("Coran et Hadiths",              "📖", "coran"),
+    ("Fiqh et Questions islamiques",  "⚖️", "fiqh"),
 ]
 
 SYSTEM_PROMPT = """Tu es un rédacteur spécialisé dans l'islam en France. 
 Tu rédiges des articles informatifs, respectueux et accessibles pour un public francophone musulman.
-Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks, sans texte autour."""
+Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks, sans texte autour.
+
+RÈGLES STRICTES :
+- Sujets UNIQUEMENT positifs, éducatifs et constructifs
+- JAMAIS de sujets sur : racisme, islamophobie, terrorisme, discrimination, conflits, politique, polémiques
+- JAMAIS de sujets négatifs ou anxiogènes
+- Focus sur : spiritualité, histoire, pratique religieuse, vie communautaire, mosquées, apprentissage
+- Ton bienveillant, sérieux et éducatif uniquement"""
 
 def generate_articles():
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
@@ -130,29 +137,83 @@ def build_articles_html(articles):
 
 
 def inject_into_html(articles):
-    """Injecte les articles dans index.html entre les marqueurs"""
+    """Ajoute les nouveaux articles EN HAUT des articles existants (accumulation)"""
     
     with open("index.html", "r", encoding="utf-8") as f:
         html = f.read()
 
     cards_html, modals_html = build_articles_html(articles)
 
-    # Remplacer entre les marqueurs
+    # Récupérer les articles existants
+    existing_cards = re.search(
+        r'<!-- GEN-ARTICLES-START -->\n?(.*?)\n?<!-- GEN-ARTICLES-END -->',
+        html, flags=re.DOTALL
+    )
+    existing_modals = re.search(
+        r'<!-- GEN-MODALS-START -->\n?(.*?)\n?<!-- GEN-MODALS-END -->',
+        html, flags=re.DOTALL
+    )
+
+    old_cards  = existing_cards.group(1).strip()  if existing_cards  else ""
+    old_modals = existing_modals.group(1).strip() if existing_modals else ""
+
+    # Compter le total d'articles existants pour générer des IDs uniques
+    total_existing = len(re.findall(r'class="ncard"', old_cards))
+
+    # Regénérer les IDs des nouveaux articles pour éviter les doublons
+    new_cards_html  = re.sub(r'art-gen-(\d+)', lambda m: f'art-gen-{total_existing + int(m.group(1))}', cards_html)
+    new_modals_html = re.sub(r'art-gen-(\d+)', lambda m: f'art-gen-{total_existing + int(m.group(1))}', modals_html)
+
+    # Nouveaux articles visibles + anciens cachés dans un bloc "voir plus"
+    if old_cards:
+        all_cards = new_cards_html + f"""
+        <div id="old-articles-block" style="display:none">
+{old_cards}
+        </div>
+        <div style="text-align:center;margin-top:18px">
+          <button onclick="toggleOldArticles()" id="voir-plus-btn"
+            style="background:var(--em);color:#fff;border:none;border-radius:25px;
+                   padding:10px 28px;font-size:.95rem;cursor:pointer;font-weight:600;">
+            📚 Voir les articles précédents
+          </button>
+        </div>"""
+    else:
+        all_cards = new_cards_html
+
+    all_modals = new_modals_html + ("\n" + old_modals if old_modals else "")
+
     html = re.sub(
         r'<!-- GEN-ARTICLES-START -->.*?<!-- GEN-ARTICLES-END -->',
-        f'<!-- GEN-ARTICLES-START -->\n{cards_html}\n<!-- GEN-ARTICLES-END -->',
+        f'<!-- GEN-ARTICLES-START -->\n{all_cards}\n<!-- GEN-ARTICLES-END -->',
         html, flags=re.DOTALL
     )
     html = re.sub(
         r'<!-- GEN-MODALS-START -->.*?<!-- GEN-MODALS-END -->',
-        f'<!-- GEN-MODALS-START -->\n{modals_html}\n<!-- GEN-MODALS-END -->',
+        f'<!-- GEN-MODALS-START -->\n{all_modals}\n<!-- GEN-MODALS-END -->',
         html, flags=re.DOTALL
     )
 
+    # Ajouter la fonction JS toggleOldArticles si pas encore présente
+    if 'toggleOldArticles' not in html:
+        js = """
+function toggleOldArticles() {
+  var block = document.getElementById('old-articles-block');
+  var btn   = document.getElementById('voir-plus-btn');
+  if (block.style.display === 'none') {
+    block.style.display = 'contents';
+    btn.textContent = '📚 Masquer les articles précédents';
+  } else {
+    block.style.display = 'none';
+    btn.textContent = '📚 Voir les articles précédents';
+  }
+}"""
+        html = html.replace('</script>', js + '\n</script>', 1)
+
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(html)
-    
-    print(f"✅ index.html mis à jour avec {len(articles)} articles")
+
+    total = total_existing + len(articles)
+    print(f"✅ index.html mis à jour — {len(articles)} nouveaux articles ajoutés ({total} au total)")
 
 
 if __name__ == "__main__":
